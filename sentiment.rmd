@@ -1,0 +1,165 @@
+---
+title: "Analiza sentymentu przy użyciu Twittera i R"
+author: "Kamil Pajdzik"
+date: "28 lutego 2015"
+output: pdf_document
+---
+
+# Wstęp
+
+Analizowanym celebrytą jest Kanye West posługujący się w serwisie Twitter nazwą @kanyewest. Artysta ten jest dosyć kontrowersyjny, stąd otrzymane wyniki powinny być ciekawe z punktu widzenia analizy sentymentu.
+
+# Opis
+
+```{r, echo=FALSE, message=FALSE, results='hide'}
+options(warn=-1)
+
+library(twitteR)
+library(wordcloud)
+library(RColorBrewer)
+library(plyr)
+library(ggplot2)
+library(sentiment)
+library(httr)
+library(knitr)
+library(rmarkdown)
+
+phrase <- "@kanyewest"
+count <- 3000
+
+oauth_endpoints("twitter")
+api_key <- "1pIyxQHrLF4wUdUmpCC1q6tPQ"
+access_token <-  "27256931-yTQdbYSxpusswOJbPgSQzZYc00xEbxkqEehgDUitM"
+api_secret <- "jVsLe155W21NjzmZVB3B1no6tPi0WV9ws8BkzMrbFIxGT43o0R"
+access_token_secret <- "HoVKqdxbLuLwKhyeQ3KxnbSfeDHs6Kd1eKF3tmeYsbTjY"
+
+setup_twitter_oauth(api_key,api_secret,access_token,access_token_secret)
+```
+
+## Przygotowanie danych
+
+Szukaną frazą jest `r phrase`, a liczba pobieranych wiadomości jest równa `r count`. Po otrzymaniu danych z API Twittera dane są oczyszczane. Kolejnymi krokami są
+
+1. Wydobycie tekstu z pełnego obiektu pojedynczego tweeta,
+2. Usunięcie fragmentów opisujących tzw. retweet,
+3. Usunięcie tzw. handle'a użytkownika (w tym przypadku głównie @kanyewest),
+4. Usunięcie znaków interpunkcyjnych,
+5. Usunięcie cyfr,
+6. Usunięcie linków do zewnętrzych zasobów,
+7. Usunięcie pozostałych znaków spoza alfabetu, np. znaków spoza alfabetu łacińskiego czy znaków emoji,
+8. Usunięcie nadmiernych znaków białych
+
+```{r}
+tweetsWithMeta = searchTwitter(phrase, n=count, lang="en")
+
+tweets = sapply(tweetsWithMeta, function(x) x$getText())
+tweets = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", tweets)
+tweets = gsub("@\\w+", "", tweets)
+tweets = gsub("[[:punct:]]", "", tweets)
+tweets = gsub("[[:digit:]]", "", tweets)
+tweets = gsub("http\\w+", "", tweets)
+tweets = gsub("[^a-zA-Z\ ]", "", tweets)
+tweets = gsub("[ \t]{2,}", "",tweets)
+tweets = gsub("^\\s+|\\s+$", "", tweets)
+```
+
+```{r, echo=FALSE}
+tryToLower = function(x)
+{
+  y = NA
+  catch_error = tryCatch(tolower(x), error=function(e) e)
+  if (!inherits(catch_error, "error"))
+    y = tolower(x)
+  
+  return(y)
+}
+
+tweets = sapply(tweets, tryToLower)
+tweets = tweets[!is.na(tweets)]
+names(tweets) = NULL
+```
+
+## Klasyfikacja
+
+Klasyfikacja emocji odbywa się z pomocą funkcji classify_emotion, która dzieli tweety na sześć kategorii emocji (i jedną dodatkową, dla tekstu, którego wydźwięku nie udało się rozpoznać). Klasyfikowane uczucia to złość (anger), odraza (disgust), strach (fear), radość (joy), smutek (sadness) i zaskoczenie (surprise).
+
+```{r}
+emotionClassification = classify_emotion(tweets, algorithm="bayes", prior=1.0)
+```
+
+```{r, echo=FALSE}
+emotion = emotionClassification[,7]
+emotion[is.na(emotion)] = "unknown"
+```
+
+Drugim sposobem klasyfikacji jest rozpoznanie wydźwięku wypowiedzi (pozytywna, neutralna lub negatywna). 
+
+```{r}
+polarityClassification = classify_polarity(tweets, algorithm="bayes")
+```
+
+```{r, echo=FALSE}
+polarity = polarityClassification[, 4]
+
+sentiment = data.frame(text=tweets, emotion=emotion, polarity=polarity, stringsAsFactors=FALSE)
+sentiment = within(sentiment, emotion <- factor(emotion, levels=names(sort(table(emotion), decreasing=TRUE))))
+
+emos <- levels(factor(sentiment$emotion))
+emosLength <- length(emos)
+emoDocs <- rep("", emosLength)
+
+for (i in 1:emosLength)
+{
+  tmp = tweets[emotion == emos[i]]
+  emoDocs[i] = paste(tmp, collapse=" ")
+}
+
+emoDocs = removeWords(emoDocs, stopwords("english"))
+
+corpus = Corpus(VectorSource(emoDocs))
+termDocumentMatrix = TermDocumentMatrix(corpus)
+termDocumentMatrix = as.matrix(termDocumentMatrix)
+colnames(termDocumentMatrix) = emos
+```
+
+# Wyniki
+
+## Chmura częstotliwości używanych słów
+```{r, echo=FALSE}
+comparison.cloud(termDocumentMatrix, 
+                 colors = brewer.pal(emosLength, "Dark2"), 
+                 scale = c(3,.5), 
+                 random.order = FALSE, 
+                 title.size = 1.5)
+```
+
+## Wykres rozkładu rodzaju uczucia wypowiedzi
+
+```{r, echo=FALSE}
+ggplot(sentiment, aes(x=emotion)) + geom_bar(aes(y=..count.., fill=emotion)) +
+  scale_fill_brewer(palette="Dark2") +
+  theme(legend.position="right") + 
+  ylab("Liczba tweetów") + 
+  xlab("Kategorie emocji")
+```
+
+## Wykres rozkładu biegunowości wypowiedzi
+
+```{r, echo=FALSE}
+ggplot(sentiment, aes(x=polarity)) +
+  geom_bar(aes(y=..count.., fill=polarity)) +
+  scale_fill_brewer(palette="RdGy") +
+  theme(legend.position="right") + 
+  ylab("Liczba tweetów") + 
+  xlab("Kategorie emocji")
+```
+
+
+
+
+
+
+
+
+
+
